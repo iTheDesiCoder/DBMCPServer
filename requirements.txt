@@ -1,0 +1,29 @@
+# Core FastAPI and web framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
+pyyaml==6.0.1
+
+# Database drivers
+pyodbc==5.0.1              # SQL Server
+asyncpg==0.29.0            # PostgreSQL
+ibm-db==3.2.3              # IBM DB2
+ibm-db-sa==0.4.0           # IBM DB2 SQLAlchemy
+sqlalchemy==2.0.23
+
+# MCP Protocol
+mcp==1.0.0
+requests==2.31.0
+
+# Caching (optional)
+redis==5.0.1
+
+# Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Text processing
+rapidfuzz==3.5.2

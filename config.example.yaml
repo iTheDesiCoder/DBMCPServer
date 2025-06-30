@@ -1,0 +1,111 @@
+# Example Configuration for Multiple Database Types
+# Copy this to config.yaml and update with your actual connection details
+
+# Application Settings
+app_name: "Enterprise MCP Server"
+app_version: "2.0.0"
+debug: true
+host: "0.0.0.0"
+port: 8000
+
+# Security Configuration
+security:
+  api_key_enabled: true
+  oauth_enabled: false
+  allowed_origins: ["*"]
+  column_masking_rules:
+    "ssn": "XXX-XX-****"
+    "credit_card": "****-****-****-****"
+    "email": "****@****.***"
+
+# API Key (change this in production!)
+api_key: "your-secret-api-key-here"
+
+# Cache Configuration
+cache:
+  enabled: true
+  redis_url: "redis://localhost:6379"
+  ttl_seconds: 3600
+  max_memory_mb: 100
+
+# Database Configurations
+databases:
+  # SQL Server Example
+  - name: "production_sqlserver"
+    type: "sqlserver"
+    connection_string: "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=ProductionDB;UID=sa;PWD=YourPassword123"
+    include_schemas: ["dbo", "sales", "inventory"]
+    exclude_objects: ["temp_*", "sys_*", "#*"]
+    max_connections: 10
+    connection_timeout: 30
+
+  # PostgreSQL Example
+  - name: "analytics_postgres"
+    type: "postgresql"
+    connection_string: "postgresql://username:password@localhost:5432/analytics_db"
+    include_schemas: ["public", "analytics", "reporting"]
+    exclude_objects: ["tmp_*", "test_*"]
+    max_connections: 15
+    connection_timeout: 30
+
+  # IBM DB2 Example
+  - name: "mainframe_db2"
+    type: "db2"
+    connection_string: "DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;PROTOCOL=TCPIP;UID=db2admin;PWD=password"
+    include_schemas: ["SCHEMA1", "SCHEMA2"]
+    exclude_objects: ["TEMP*", "SYS*"]
+    max_connections: 5
+    connection_timeout: 45
+
+  # MySQL Example (requires aiomysql)
+  - name: "web_mysql"
+    type: "mysql"
+    connection_string: "mysql://user:password@localhost:3306/webapp_db"
+    include_schemas: ["webapp_db"]
+    exclude_objects: ["cache_*", "session_*"]
+    max_connections: 20
+    connection_timeout: 30
+
+  # Oracle Example (requires cx_Oracle)
+  - name: "enterprise_oracle"
+    type: "oracle"
+    connection_string: "oracle://username:password@localhost:1521/XE"
+    include_schemas: ["HR", "SALES", "INVENTORY"]
+    exclude_objects: ["TEMP_*", "BIN$*"]
+    max_connections: 8
+    connection_timeout: 60
+
+# Fuzzy Matching Settings
+fuzzy_threshold: 80
+max_suggestions: 10
+
+# Example connection strings for different databases:
+#
+# SQL Server:
+#   - Windows Authentication: "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=MyDB;Trusted_Connection=yes"
+#   - SQL Authentication: "DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost;DATABASE=MyDB;UID=username;PWD=password"
+#
+# PostgreSQL:
+#   - Basic: "postgresql://username:password@localhost:5432/database_name"
+#   - With SSL: "postgresql://username:password@localhost:5432/database_name?sslmode=require"
+#
+# MySQL:
+#   - Basic: "mysql://username:password@localhost:3306/database_name"
+#   - With charset: "mysql://username:password@localhost:3306/database_name?charset=utf8mb4"
+#
+# Oracle:
+#   - SID format: "oracle://username:password@localhost:1521/sid"
+#   - Service name: "oracle://username:password@localhost:1521/?service_name=service"
+#
+# IBM DB2:
+#   - Local: "DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;PROTOCOL=TCPIP;UID=username;PWD=password"
+#   - Remote: "DATABASE=MYDB;HOSTNAME=remote.server.com;PORT=50000;PROTOCOL=TCPIP;UID=username;PWD=password"
+
+# Production Security Notes:
+# 1. Change the default API key
+# 2. Use environment variables for sensitive data
+# 3. Enable HTTPS in production
+# 4. Configure proper CORS origins
+# 5. Use strong database passwords
+# 6. Consider using connection pooling
+# 7. Enable logging and monitoring
