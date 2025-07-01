@@ -11,6 +11,7 @@ from app.models import (
     SchemaOverview, DatabaseMetadataResponse
 )
 from app.cache import cache_result
+from app.services.fuzzy_match import fuzzy_matcher
 import logging
 
 logger = logging.getLogger(__name__)
@@ -221,7 +222,7 @@ class DatabaseMetadataService:
         limit: int = 50
     ) -> List[Dict[str, Any]]:
         """
-        Search for database objects matching the search term.
+        Search for database objects matching the search term with improved error handling.
         
         Args:
             search_term: Term to search for
@@ -235,75 +236,165 @@ class DatabaseMetadataService:
         """
         connector = await self.get_connector(database_name)
         results = []
+        errors = []
         
         if not object_types:
             object_types = [DatabaseObjectType.TABLE, DatabaseObjectType.VIEW, 
                           DatabaseObjectType.STORED_PROCEDURE, DatabaseObjectType.FUNCTION]
         
         try:
-            # Search tables and views
+            # Search tables and views with error handling
             if DatabaseObjectType.TABLE in object_types or DatabaseObjectType.VIEW in object_types:
-                schemas_to_search = [schema] if schema else await connector.get_schemas()
-                
-                for schema_name in schemas_to_search:
-                    if not connector.should_include_schema(schema_name):
-                        continue
+                try:
+                    schemas_to_search = [schema] if schema else await connector.get_schemas()
+                    
+                    for schema_name in schemas_to_search:
+                        if not connector.should_include_schema(schema_name):
+                            continue
                         
-                    tables = await connector.get_tables(schema_name)
-                    for table in tables:
-                        if (search_term.lower() in table["name"].lower() and 
-                            not connector.should_exclude_object(table["name"])):
+                        try:
+                            tables = await connector.get_tables(schema_name)
+                            for table in tables:
+                                if (search_term.lower() in table["name"].lower() and 
+                                    not connector.should_exclude_object(table["name"])):
+                                    
+                                    table_type = table.get("type", "TABLE")
+                                    if ((table_type == "TABLE" and DatabaseObjectType.TABLE in object_types) or
+                                        (table_type == "VIEW" and DatabaseObjectType.VIEW in object_types)):
+                                        
+                                        results.append({
+                                            "name": table["name"],
+                                            "schema": schema_name,
+                                            "type": table_type,
+                                            "description": table.get("description", ""),
+                                            "object_category": "table" if table_type == "TABLE" else "view"
+                                        })
+                                        
+                                        if len(results) >= limit:
+                                            break
                             
-                            table_type = table.get("type", "TABLE")
-                            if ((table_type == "TABLE" and DatabaseObjectType.TABLE in object_types) or
-                                (table_type == "VIEW" and DatabaseObjectType.VIEW in object_types)):
-                                
-                                results.append({
-                                    "name": table["name"],
-                                    "schema": schema_name,
-                                    "type": table_type,
-                                    "description": table.get("description", "")
-                                })
-                                
-                                if len(results) >= limit:
-                                    break
-                    
-                    if len(results) >= limit:
-                        break
-            
-            # Search stored procedures
+                            if len(results) >= limit:
+                                break
+                        except Exception as e:
+                            logger.warning(f"Error searching tables in schema {schema_name}: {e}")
+                            errors.append(f"Schema {schema_name}: {str(e)}")
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"Error getting schemas for table search: {e}")
+                    errors.append(f"Table search: {str(e)}")
+
+            # Search stored procedures with improved error handling
             if DatabaseObjectType.STORED_PROCEDURE in object_types and len(results) < limit:
-                schemas_to_search = [schema] if schema else await connector.get_schemas()
-                
-                for schema_name in schemas_to_search:
-                    if not connector.should_include_schema(schema_name):
-                        continue
+                try:
+                    schemas_to_search = [schema] if schema else await connector.get_schemas()
                     
-                    try:
-                        procedures = await connector.get_stored_procedures(schema_name)
-                        for procedure in procedures:
-                            if (search_term.lower() in procedure["name"].lower() and 
-                                not connector.should_exclude_object(procedure["name"])):
-                                
-                                results.append({
-                                    "name": procedure["name"],
-                                    "schema": schema_name,
-                                    "type": "PROCEDURE",
-                                    "description": procedure.get("description", "")
-                                })
-                                
-                                if len(results) >= limit:
-                                    break
+                    for schema_name in schemas_to_search:
+                        if not connector.should_include_schema(schema_name):
+                            continue
                         
-                        if len(results) >= limit:
-                            break
-                    except NotImplementedError:
-                        continue
+                        try:
+                            procedures = await connector.get_stored_procedures(schema_name)
+                            for procedure in procedures:
+                                if (search_term.lower() in procedure["name"].lower() and 
+                                    not connector.should_exclude_object(procedure["name"])):
+                                    
+                                    results.append({
+                                        "name": procedure["name"],
+                                        "schema": schema_name,
+                                        "type": "PROCEDURE",
+                                        "description": procedure.get("description", ""),
+                                        "object_category": "stored_procedure"
+                                    })
+                                    
+                                    if len(results) >= limit:
+                                        break
+                            
+                            if len(results) >= limit:
+                                break
+                        except NotImplementedError:
+                            logger.info(f"Stored procedures not implemented for {connector.database_type}")
+                            continue
+                        except Exception as e:
+                            logger.warning(f"Error searching procedures in schema {schema_name}: {e}")
+                            errors.append(f"Procedures in {schema_name}: {str(e)}")
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"Error getting schemas for procedure search: {e}")
+                    errors.append(f"Procedure search: {str(e)}")
+
+            # Search functions with error handling
+            if DatabaseObjectType.FUNCTION in object_types and len(results) < limit:
+                try:
+                    schemas_to_search = [schema] if schema else await connector.get_schemas()
+                    
+                    for schema_name in schemas_to_search:
+                        if not connector.should_include_schema(schema_name):
+                            continue
+                        
+                        try:
+                            functions = await connector.get_functions(schema_name)
+                            for function in functions:
+                                if (search_term.lower() in function["name"].lower() and 
+                                    not connector.should_exclude_object(function["name"])):
+                                    
+                                    results.append({
+                                        "name": function["name"],
+                                        "schema": schema_name,
+                                        "type": "FUNCTION",
+                                        "description": function.get("description", ""),
+                                        "object_category": "function"
+                                    })
+                                    
+                                    if len(results) >= limit:
+                                        break
+                            
+                            if len(results) >= limit:
+                                break
+                        except NotImplementedError:
+                            logger.info(f"Functions not implemented for {connector.database_type}")
+                            continue
+                        except Exception as e:
+                            logger.warning(f"Error searching functions in schema {schema_name}: {e}")
+                            errors.append(f"Functions in {schema_name}: {str(e)}")
+                            continue
+                            
+                except Exception as e:
+                    logger.warning(f"Error getting schemas for function search: {e}")
+                    errors.append(f"Function search: {str(e)}")
+
+            # Log any errors encountered but don't fail the entire search
+            if errors:
+                logger.warning(f"Search completed with some errors: {errors}")
+            
+            # Apply fuzzy matching for better ranking
+            try:
+                results = fuzzy_matcher.rank_search_results(search_term, results)
+                logger.info(f"Applied fuzzy ranking to {len(results)} results")
+            except Exception as e:
+                logger.warning(f"Fuzzy ranking failed, using basic sort: {e}")
+                # Fallback to basic relevance sorting
+                def sort_key(item):
+                    name = item["name"].lower()
+                    search_lower = search_term.lower()
+                    
+                    # Exact match
+                    if name == search_lower:
+                        return (0, name)
+                    # Starts with search term
+                    elif name.startswith(search_lower):
+                        return (1, name)
+                    # Contains search term
+                    else:
+                        return (2, name)
+                
+                results.sort(key=sort_key)
             
             return results[:limit]
             
         except Exception as e:
-            logger.error(f"Error searching database objects: {e}")
+            logger.error(f"Critical error in search_objects: {e}")
             raise
     
     async def health_check(self, database_name: Optional[str] = None) -> Dict[str, Any]:

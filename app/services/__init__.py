@@ -1,10 +1,8 @@
 """
-Simplified services module for initial testing
+Services module for database metadata operations
 """
-from app.services.simple import (
-    get_metadata_suggestion,
-    get_table_details, 
-    get_stored_procedure_details,
-    get_database_overview,
-    clear_cache_for_database
-)
+from app.services.metadata import metadata_service
+from app.services.fuzzy_match import fuzzy_matcher
+
+# Export the main service instance
+__all__ = ['metadata_service', 'fuzzy_matcher']

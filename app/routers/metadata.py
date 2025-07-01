@@ -83,47 +83,128 @@ async def get_stored_procedure_metadata(
 
 @router.get("/search")
 async def search_database_objects(
-    q: str = Query(..., description="Search term"),
-    types: Optional[List[str]] = Query(None, description="Object types to search"),
+    q: str = Query(..., description="Search term", min_length=1),
+    types: Optional[List[str]] = Query(None, description="Object types to search (table, view, stored_procedure, function)"),
     schema: Optional[str] = Query(None, description="Schema to search within"),
     database: Optional[str] = Query(None, description="Database name to query"),
     limit: int = Query(50, ge=1, le=200, description="Maximum number of results"),
     api_key: str = Depends(get_api_key)
 ):
-    """Search for database objects matching the search term"""
+    """Search for database objects matching the search term with smart error handling"""
     try:
-        # Convert string types to DatabaseObjectType enum
+        # Validate and convert string types to DatabaseObjectType enum
         object_types = None
+        valid_types = ["table", "view", "stored_procedure", "function"]
+        
         if types:
             object_types = []
+            invalid_types = []
+            
             for type_str in types:
-                try:
-                    object_types.append(DatabaseObjectType(type_str.lower()))
-                except ValueError:
-                    raise HTTPException(
-                        status_code=400, 
-                        detail=f"Invalid object type: {type_str}. Valid types: table, view, stored_procedure, function"
-                    )
+                type_str_clean = type_str.lower().strip()
+                
+                # Handle common aliases
+                if type_str_clean in ["proc", "procedure", "sp"]:
+                    type_str_clean = "stored_procedure"
+                elif type_str_clean in ["func", "fn"]:
+                    type_str_clean = "function"
+                elif type_str_clean in ["tbl"]:
+                    type_str_clean = "table"
+                elif type_str_clean in ["vw"]:
+                    type_str_clean = "view"
+                
+                if type_str_clean in valid_types:
+                    try:
+                        object_types.append(DatabaseObjectType(type_str_clean))
+                    except ValueError:
+                        invalid_types.append(type_str)
+                else:
+                    invalid_types.append(type_str)
+            
+            if invalid_types:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "Invalid object types",
+                        "invalid_types": invalid_types,
+                        "valid_types": valid_types,
+                        "aliases": {
+                            "stored_procedure": ["proc", "procedure", "sp"],
+                            "function": ["func", "fn"],
+                            "table": ["tbl"],
+                            "view": ["vw"]
+                        }
+                    }
+                )
+        
+        # Validate search term
+        if not q or not q.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="Search term cannot be empty"
+            )
+        
+        search_term = q.strip()
+        
+        logger.info(f"Searching for '{search_term}' with types: {[t.value for t in object_types] if object_types else 'all'}")
         
         results = await metadata_service.search_objects(
-            search_term=q,
+            search_term=search_term,
             object_types=object_types,
             schema=schema,
             database_name=database,
             limit=limit
         )
         
+        # Categorize results for better response
+        categorized_results = {
+            "tables": [],
+            "views": [],
+            "stored_procedures": [],
+            "functions": []
+        }
+        
+        for result in results:
+            result_type = result.get("type", "").lower()
+            if result_type == "table":
+                categorized_results["tables"].append(result)
+            elif result_type == "view":
+                categorized_results["views"].append(result)
+            elif result_type in ["procedure", "stored_procedure"]:
+                categorized_results["stored_procedures"].append(result)
+            elif result_type == "function":
+                categorized_results["functions"].append(result)
+        
         return {
-            "query": q,
+            "query": search_term,
             "results": results,
-            "total_found": len(results)
+            "categorized_results": categorized_results,
+            "total_found": len(results),
+            "counts": {
+                "tables": len(categorized_results["tables"]),
+                "views": len(categorized_results["views"]),
+                "stored_procedures": len(categorized_results["stored_procedures"]),
+                "functions": len(categorized_results["functions"])
+            },
+            "search_info": {
+                "searched_types": [t.value for t in object_types] if object_types else valid_types,
+                "searched_schema": schema,
+                "limit_applied": limit
+            }
         }
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error searching database objects: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500, 
+            detail={
+                "error": "Search failed",
+                "message": str(e),
+                "search_term": q if 'q' in locals() else None
+            }
+        )
 
 
 @router.post("/cache/clear")

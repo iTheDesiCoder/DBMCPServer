@@ -45,16 +45,57 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name="MyDB_search_database_objects", 
-            description="Search for database objects (tables, procedures, etc.) by name",
+            description="Search for database objects (tables, procedures, etc.) by name with smart type detection",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query to find database objects"
+                        "description": "Search query to find database objects (use 'sp_' for procedures, 'fn_' for functions, 'vw_' for views)"
+                    },
+                    "types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Specific object types to search (table, view, stored_procedure, function)"
                     }
                 },
                 "required": ["query"]
+            }
+        ),
+        Tool(
+            name="MyDB_get_stored_procedure_details",
+            description="Get detailed information about a specific stored procedure including parameters and related tables",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "procedure_name": {
+                        "type": "string",
+                        "description": "Name of the stored procedure to get details for"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Schema name (optional)"
+                    }
+                },
+                "required": ["procedure_name"]
+            }
+        ),
+        Tool(
+            name="MyDB_analyze_table_dependencies",
+            description="Analyze which stored procedures use a specific table",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "table_name": {
+                        "type": "string",
+                        "description": "Name of the table to analyze dependencies for"
+                    },
+                    "schema": {
+                        "type": "string",
+                        "description": "Schema name (optional)"
+                    }
+                },
+                "required": ["table_name"]
             }
         ),
         Tool(
@@ -98,6 +139,10 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
             return await search_database_objects(arguments)
         elif name == "MyDB_get_table_schema":
             return await get_table_schema(arguments)
+        elif name == "MyDB_get_stored_procedure_details":
+            return await get_stored_procedure_details(arguments)
+        elif name == "MyDB_analyze_table_dependencies":
+            return await analyze_table_dependencies(arguments)
         elif name == "MyDB_check_database_health":
             return await check_database_health(arguments)
         else:
@@ -128,22 +173,51 @@ async def get_database_overview(args: Dict[str, Any]) -> List[TextContent]:
         return [TextContent(type="text", text=error_msg)]
 
 async def search_database_objects(args: Dict[str, Any]) -> List[TextContent]:
-    """Search database objects"""
+    """Search database objects with smart type detection"""
     try:
         if not args or "query" not in args:
             return [TextContent(type="text", text="Error: Query parameter is required")]
         
-        params = {"query": args["query"]}
-        logger.info(f"🔍 Searching database objects with query: {params['query']}")
+        search_query = args["query"].strip()
         
-        response = requests.get(f"{API_BASE_URL}/api/v1/metadata/search", params=params, timeout=10)
+        # Smart object type detection based on query patterns
+        suggested_types = detect_object_types(search_query)
+        
+        # API expects 'q' parameter, not 'query'
+        params = {
+            "q": search_query,
+            "limit": 100  # Get more results for better analysis
+        }
+        
+        # Add detected types if we have strong indicators, or use provided types
+        search_types = args.get("types", [])
+        if search_types:
+            # User provided specific types
+            params["types"] = search_types
+            logger.info(f"Using user-specified types: {search_types}")
+        elif suggested_types:
+            # Use smart detection
+            params["types"] = suggested_types
+            logger.info(f"Using detected types: {suggested_types}")
+        
+        logger.info(f"🔍 Searching database objects with query: '{search_query}', suggested types: {suggested_types}")
+        
+        response = requests.get(f"{API_BASE_URL}/api/v1/metadata/search", params=params, timeout=15)
         response.raise_for_status()
         
         data = response.json()
-        formatted_response = format_search_results(data, params["query"])
+        formatted_response = format_smart_search_results(data, search_query, suggested_types)
         logger.info("✅ Search completed successfully")
         
         return [TextContent(type="text", text=formatted_response)]
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 422:
+            error_msg = f"🚫 Invalid search parameters. Please check your query: '{search_query}'"
+            logger.error(f"422 Error - {error_msg}: {e.response.text}")
+        else:
+            error_msg = f"HTTP Error {e.response.status_code}: {e.response.text}"
+            logger.error(error_msg)
+        return [TextContent(type="text", text=error_msg)]
     except Exception as e:
         error_msg = f"Error searching database objects: {str(e)}"
         logger.error(error_msg)
@@ -189,6 +263,129 @@ async def check_database_health(args: Dict[str, Any]) -> List[TextContent]:
         return [TextContent(type="text", text=formatted_response)]
     except Exception as e:
         error_msg = f"Error checking database health: {str(e)}"
+        logger.error(error_msg)
+        return [TextContent(type="text", text=error_msg)]
+
+async def get_stored_procedure_details(args: Dict[str, Any]) -> List[TextContent]:
+    """Get detailed stored procedure information"""
+    try:
+        if not args or "procedure_name" not in args:
+            return [TextContent(type="text", text="Error: procedure_name parameter is required")]
+        
+        procedure_name = args["procedure_name"]
+        schema = args.get("schema")
+        
+        logger.info(f"⚙️ Getting details for stored procedure: {procedure_name}")
+        
+        # Build URL for procedure metadata
+        url = f"{API_BASE_URL}/api/v1/metadata/procedure/{procedure_name}"
+        params = {}
+        if schema:
+            params["schema"] = schema
+        
+        response = requests.get(url, params=params, timeout=15)
+        response.raise_for_status()
+        
+        data = response.json()
+        formatted_response = format_stored_procedure_details(data)
+        logger.info("✅ Stored procedure details retrieved successfully")
+        
+        return [TextContent(type="text", text=formatted_response)]
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            error_msg = f"🚫 Stored procedure '{procedure_name}' not found"
+        else:
+            error_msg = f"HTTP Error {e.response.status_code}: {e.response.text}"
+        logger.error(error_msg)
+        return [TextContent(type="text", text=error_msg)]
+    except Exception as e:
+        error_msg = f"Error getting stored procedure details: {str(e)}"
+        logger.error(error_msg)
+        return [TextContent(type="text", text=error_msg)]
+
+async def analyze_table_dependencies(args: Dict[str, Any]) -> List[TextContent]:
+    """Analyze which stored procedures use a specific table"""
+    try:
+        if not args or "table_name" not in args:
+            return [TextContent(type="text", text="Error: table_name parameter is required")]
+        
+        table_name = args["table_name"]
+        schema = args.get("schema")
+        
+        logger.info(f"🔍 Analyzing table dependencies for: {table_name}")
+        
+        # Search for stored procedures that might reference this table
+        search_params = {
+            "q": table_name,
+            "types": ["stored_procedure"],
+            "limit": 50
+        }
+        
+        if schema:
+            search_params["schema"] = schema
+        
+        response = requests.get(
+            f"{API_BASE_URL}/api/v1/metadata/search",
+            params=search_params,
+            timeout=15
+        )
+        response.raise_for_status()
+        
+        search_data = response.json()
+        procedures = search_data.get('results', [])
+        
+        # Get detailed information for each procedure to check table dependencies
+        dependencies = []
+        for proc in procedures:
+            proc_name = proc['name']
+            proc_schema = proc.get('schema', schema)
+            
+            try:
+                # Get procedure details including related tables
+                detail_response = requests.get(
+                    f"{API_BASE_URL}/api/v1/metadata/procedure/{proc_name}",
+                    params={"schema": proc_schema} if proc_schema else {},
+                    timeout=10
+                )
+                
+                if detail_response.status_code == 200:
+                    proc_data = detail_response.json()
+                    related_tables = proc_data.get('related_tables', [])
+                    
+                    # Check if our target table is in the related tables
+                    full_table_name = f"{schema}.{table_name}" if schema else table_name
+                    
+                    table_found = False
+                    for related_table in related_tables:
+                        if (table_name.lower() in related_table.lower() or 
+                            full_table_name.lower() == related_table.lower()):
+                            table_found = True
+                            break
+                    
+                    if table_found:
+                        dependencies.append({
+                            'procedure_name': proc_name,
+                            'procedure_schema': proc_schema,
+                            'related_tables': related_tables,
+                            'parameters': proc_data.get('parameters', [])
+                        })
+                        
+            except Exception as e:
+                logger.warning(f"Could not get details for procedure {proc_name}: {e}")
+                continue
+        
+        # Format the response
+        formatted_response = format_table_dependency_analysis(table_name, schema, dependencies)
+        logger.info("✅ Table dependency analysis completed")
+        
+        return [TextContent(type="text", text=formatted_response)]
+        
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"HTTP Error {e.response.status_code}: {e.response.text}"
+        logger.error(error_msg)
+        return [TextContent(type="text", text=error_msg)]
+    except Exception as e:
+        error_msg = f"Error analyzing table dependencies: {str(e)}"
         logger.error(error_msg)
         return [TextContent(type="text", text=error_msg)]
 
@@ -298,6 +495,237 @@ def format_health_check(data: Dict[str, Any]) -> str:
     
     version = data.get('version', 'Unknown')
     output.append(f"**Version**: {version}")
+    
+    return "\n".join(output)
+
+def format_stored_procedure_details(data: Dict[str, Any]) -> str:
+    """Format stored procedure details response"""
+    output = []
+    output.append(f"# ⚙️ Stored Procedure: {data.get('procedure_name', 'Unknown')}")
+    output.append(f"**Schema**: {data.get('schema_name', 'Unknown')}")
+    output.append("")
+    
+    # Description
+    if data.get('description'):
+        output.append(f"**Description**: {data['description']}")
+        output.append("")
+    
+    # Parameters
+    parameters = data.get('parameters', [])
+    if parameters:
+        output.append("## 📝 Parameters:")
+        output.append("| Parameter | Type | Direction | Default | Nullable |")
+        output.append("|-----------|------|-----------|---------|----------|")
+        
+        for param in parameters:
+            direction = param.get('direction', 'IN')
+            default = param.get('default_value', '')
+            nullable = "✅" if param.get('nullable') else "❌"
+            
+            output.append(f"| {param.get('name', '')} | {param.get('type', '')} | {direction} | {default} | {nullable} |")
+        
+        output.append("")
+        output.append(f"**Total Parameters**: {len(parameters)}")
+    else:
+        output.append("**Parameters**: None")
+    
+    output.append("")
+    
+    # Return type (if available)
+    if data.get('return_type'):
+        output.append(f"**Return Type**: {data['return_type']}")
+    
+    # Related tables (NEW FEATURE!)
+    related_tables = data.get('related_tables', [])
+    if related_tables:
+        output.append("")
+        output.append("## 🔗 Related Tables:")
+        for table in related_tables:
+            output.append(f"- **{table}**")
+        output.append("")
+        output.append(f"**Total Tables Referenced**: {len(related_tables)}")
+    else:
+        output.append("")
+        output.append("**Related Tables**: None detected")
+    
+    # Definition (if available and not too long)
+    definition = data.get('definition', '')
+    if definition and len(definition) < 2000:
+        output.append("")
+        output.append("## 📋 Definition:")
+        output.append("```sql")
+        output.append(definition)
+        output.append("```")
+    elif definition:
+        output.append("")
+        output.append("## 📋 Definition:")
+        output.append("*(Definition too long to display fully)*")
+        output.append("```sql")
+        output.append(definition[:500] + "...")
+        output.append("```")
+    
+    return "\n".join(output)
+
+def detect_object_types(query: str) -> List[str]:
+    """
+    Smart detection of database object types based on query patterns
+    """
+    query_lower = query.lower().strip()
+    types = []
+    
+    # Stored procedure indicators
+    proc_indicators = ['proc', 'procedure', 'sp_', 'usp_', 'stored', 'exec', 'execute']
+    if any(indicator in query_lower for indicator in proc_indicators):
+        types.append('stored_procedure')
+    
+    # Function indicators
+    func_indicators = ['func', 'function', 'fn_', 'ufn_']
+    if any(indicator in query_lower for indicator in func_indicators):
+        types.append('function')
+    
+    # View indicators
+    view_indicators = ['view', 'vw_', 'v_']
+    if any(indicator in query_lower for indicator in view_indicators):
+        types.append('view')
+    
+    # Table indicators (less specific, so lower priority)
+    table_indicators = ['table', 'tbl_', 't_']
+    if any(indicator in query_lower for indicator in table_indicators):
+        types.append('table')
+    
+    # If no specific indicators, include all common types
+    if not types:
+        types = ['table', 'view', 'stored_procedure', 'function']
+    
+    return types
+
+def format_smart_search_results(data: Dict[str, Any], query: str, suggested_types: List[str]) -> str:
+    """Format search results with smart categorization"""
+    results = data.get('results', [])
+    
+    if not results:
+        return f"🔍 No database objects found matching '{query}'"
+    
+    # Categorize results by type
+    categorized = {
+        'table': [],
+        'view': [],
+        'stored_procedure': [],
+        'function': []
+    }
+    
+    for result in results:
+        obj_type = result.get('type', '').lower()
+        if obj_type == 'procedure':
+            obj_type = 'stored_procedure'
+        
+        if obj_type in categorized:
+            categorized[obj_type].append(result)
+    
+    output = [f"🔍 Search Results for '{query}' ({len(results)} found)"]
+    
+    if suggested_types:
+        output.append(f"🎯 **Detected likely types**: {', '.join(suggested_types)}")
+    
+    output.append("")
+    
+    # Display results by category
+    type_icons = {
+        'table': '📋',
+        'view': '👁️',
+        'stored_procedure': '⚙️',
+        'function': '🔧'
+    }
+    
+    type_names = {
+        'table': 'Tables',
+        'view': 'Views', 
+        'stored_procedure': 'Stored Procedures',
+        'function': 'Functions'
+    }
+    
+    for obj_type, objects in categorized.items():
+        if objects:
+            output.append(f"## {type_icons[obj_type]} {type_names[obj_type]} ({len(objects)})")
+            
+            for obj in objects[:10]:  # Limit per category
+                output.append(f"### 📝 {obj.get('name', 'Unknown')}")
+                output.append(f"- **Schema**: {obj.get('schema', 'Unknown')}")
+                if obj.get('description'):
+                    output.append(f"- **Description**: {obj['description']}")
+                output.append("")
+            
+            if len(objects) > 10:
+                output.append(f"... and {len(objects) - 10} more {type_names[obj_type].lower()}")
+                output.append("")
+    
+    # Add search tips
+    output.append("---")
+    output.append("💡 **Search Tips:**")
+    output.append("- Use 'sp_' or 'proc' to find stored procedures")
+    output.append("- Use 'fn_' or 'func' to find functions") 
+    output.append("- Use 'vw_' or 'view' to find views")
+    output.append("- Use table names directly for tables")
+    
+    return "\n".join(output)
+
+def format_table_dependency_analysis(table_name: str, schema: Optional[str], dependencies: List[Dict[str, Any]]) -> str:
+    """Format table dependency analysis results"""
+    output = []
+    full_table_name = f"{schema}.{table_name}" if schema else table_name
+    
+    output.append(f"# 🔍 Table Dependency Analysis: {full_table_name}")
+    output.append("")
+    
+    if not dependencies:
+        output.append("🔍 **No stored procedures found that reference this table.**")
+        output.append("")
+        output.append("This could mean:")
+        output.append("- The table is not used by any stored procedures")
+        output.append("- The table name might be referenced differently in procedures")
+        output.append("- The procedures might be in different schemas")
+        return "\n".join(output)
+    
+    output.append(f"📊 **Found {len(dependencies)} stored procedure(s) that reference this table:**")
+    output.append("")
+    
+    for i, dep in enumerate(dependencies, 1):
+        proc_name = dep['procedure_name']
+        proc_schema = dep['procedure_schema']
+        related_tables = dep['related_tables']
+        parameters = dep['parameters']
+        
+        output.append(f"## {i}. ⚙️ {proc_name}")
+        output.append(f"**Schema**: {proc_schema}")
+        
+        if parameters:
+            output.append(f"**Parameters**: {len(parameters)} parameter(s)")
+            for param in parameters[:3]:  # Show first 3 parameters
+                direction = param.get('direction', 'IN')
+                output.append(f"- `{param.get('name', '')}` ({param.get('type', '')}) - {direction}")
+            if len(parameters) > 3:
+                output.append(f"- ... and {len(parameters) - 3} more parameters")
+        
+        if related_tables:
+            output.append(f"**All Referenced Tables** ({len(related_tables)}):")
+            for table in related_tables:
+                if table_name.lower() in table.lower():
+                    output.append(f"- 🎯 **{table}** ← Target table")
+                else:
+                    output.append(f"- {table}")
+        
+        output.append("")
+    
+    # Summary
+    output.append("---")
+    output.append("## 📈 Summary")
+    all_related_tables = set()
+    for dep in dependencies:
+        all_related_tables.update(dep.get('related_tables', []))
+    
+    output.append(f"- **Procedures analyzing**: {len(dependencies)}")
+    output.append(f"- **Total unique tables involved**: {len(all_related_tables)}")
+    output.append(f"- **Target table**: {full_table_name}")
     
     return "\n".join(output)
 

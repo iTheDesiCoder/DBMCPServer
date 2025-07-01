@@ -216,16 +216,109 @@ class PostgreSQLConnector(BaseDatabaseConnector):
             # Get parameters
             parameters = await self._get_procedure_parameters(sp_name, schema)
             
+            # Get related tables by parsing function definition
+            related_tables = await self._get_procedure_related_tables(sp_name, schema)
+            
             return StoredProcedureMetadata(
                 name=sp_name,
                 schema_name=schema,
                 parameters=parameters,
                 returns=[],
-                related_tables=[]
+                related_tables=related_tables
             )
         except Exception as e:
             self.logger.error(f"Error getting procedure metadata for {schema}.{sp_name}: {e}")
             raise QueryError(f"Failed to get procedure metadata: {e}")
+
+    async def _get_procedure_related_tables(self, function_name: str, schema: str) -> List[str]:
+        """Get related tables for a PostgreSQL function/procedure by parsing its definition"""
+        try:
+            # Get function definition from PostgreSQL system catalogs
+            definition_query = """
+            SELECT pg_get_functiondef(p.oid) as definition
+            FROM pg_proc p
+            JOIN pg_namespace n ON p.pronamespace = n.oid
+            WHERE p.proname = $1 AND n.nspname = $2
+            """
+            
+            result = await self.execute_query(definition_query, [function_name, schema])
+            
+            if not result or not result[0].get('definition'):
+                return []
+            
+            definition = result[0]['definition'].upper()
+            tables = set()
+            
+            # Common SQL patterns to find table references
+            import re
+            
+            # Pattern 1: FROM table_name or JOIN table_name
+            from_join_pattern = r'\b(?:FROM|JOIN)\s+(?:([a-zA-Z_][a-zA-Z0-9_]*)\.)?\s*([a-zA-Z_][a-zA-Z0-9_]*)'
+            matches = re.findall(from_join_pattern, definition, re.IGNORECASE)
+            
+            for match in matches:
+                schema_part, table_part = match
+                if table_part:
+                    # Skip common SQL keywords and system objects
+                    if table_part.upper() not in ['INFORMATION_SCHEMA', 'PG_CATALOG', 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'VALUES', 'DECLARE']:
+                        if schema_part:
+                            tables.add(f"{schema_part}.{table_part}")
+                        else:
+                            tables.add(table_part)
+            
+            # Pattern 2: INSERT INTO table_name, UPDATE table_name
+            insert_update_pattern = r'\b(?:INSERT\s+INTO|UPDATE)\s+(?:([a-zA-Z_][a-zA-Z0-9_]*)\.)?\s*([a-zA-Z_][a-zA-Z0-9_]*)'
+            matches = re.findall(insert_update_pattern, definition, re.IGNORECASE)
+            
+            for match in matches:
+                schema_part, table_part = match
+                if table_part and table_part.upper() not in ['VALUES', 'SET']:
+                    if schema_part:
+                        tables.add(f"{schema_part}.{table_part}")
+                    else:
+                        tables.add(table_part)
+            
+            # Pattern 3: DELETE FROM table_name
+            delete_pattern = r'\bDELETE\s+FROM\s+(?:([a-zA-Z_][a-zA-Z0-9_]*)\.)?\s*([a-zA-Z_][a-zA-Z0-9_]*)'
+            matches = re.findall(delete_pattern, definition, re.IGNORECASE)
+            
+            for match in matches:
+                schema_part, table_part = match
+                if table_part:
+                    if schema_part:
+                        tables.add(f"{schema_part}.{table_part}")
+                    else:
+                        tables.add(table_part)
+            
+            # Verify tables exist in database to filter out false positives
+            verified_tables = []
+            for table in tables:
+                if '.' in table:
+                    table_schema, table_name = table.split('.', 1)
+                else:
+                    table_schema, table_name = schema, table
+                
+                # Check if table exists in PostgreSQL
+                try:
+                    check_query = """
+                    SELECT COUNT(*) as count_result
+                    FROM information_schema.tables 
+                    WHERE table_schema = $1 AND table_name = $2
+                    """
+                    check_result = await self.execute_query(check_query, [table_schema.lower(), table_name.lower()])
+                    exists = check_result and len(check_result) > 0 and check_result[0].get('count_result', 0) > 0
+                    
+                    if exists:
+                        verified_tables.append(f"{table_schema}.{table_name}")
+                except Exception:
+                    # If verification fails, include the table anyway
+                    verified_tables.append(table)
+            
+            return sorted(list(set(verified_tables)))
+            
+        except Exception as e:
+            self.logger.warning(f"Error parsing table dependencies for {schema}.{function_name}: {e}")
+            return []
     
     async def get_functions(self, schema: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get list of functions from PostgreSQL"""

@@ -466,6 +466,99 @@ class SQLServerConnector(BaseDatabaseConnector):
         return []
     
     async def _get_procedure_related_tables(self, sp_name: str, schema: str) -> List[str]:
-        """Get related tables for a stored procedure (simplified)"""
-        # TODO: Implement by parsing procedure text for table references
-        return []
+        """Get related tables for a stored procedure by parsing its definition"""
+        return await self._parse_procedure_table_dependencies(sp_name, schema)
+    
+    async def _parse_procedure_table_dependencies(self, sp_name: str, schema: str) -> List[str]:
+        """
+        Parse stored procedure definition to extract table dependencies
+        """
+        try:
+            # Get procedure definition
+            definition_query = """
+            SELECT 
+                m.definition
+            FROM sys.sql_modules m
+            INNER JOIN sys.procedures p ON m.object_id = p.object_id
+            INNER JOIN sys.schemas s ON p.schema_id = s.schema_id
+            WHERE p.name = ? AND s.name = ?
+            """
+            
+            definition_result = await self.execute_query(definition_query, [sp_name, schema])
+            
+            if not definition_result or not definition_result[0].get('definition'):
+                return []
+            
+            definition = definition_result[0]['definition'].upper()
+            tables = set()
+            
+            # Common SQL patterns to find table references
+            import re
+            
+            # Pattern 1: FROM table_name or JOIN table_name
+            from_join_pattern = r'\b(?:FROM|JOIN)\s+(?:\[?([a-zA-Z_][a-zA-Z0-9_]*)\]?\.)?(?:\[?([a-zA-Z_][a-zA-Z0-9_]*)\]?)'
+            matches = re.findall(from_join_pattern, definition, re.IGNORECASE)
+            
+            for match in matches:
+                schema_part, table_part = match
+                if table_part:
+                    # Skip common SQL keywords and system objects
+                    if table_part.upper() not in ['INFORMATION_SCHEMA', 'SYS', 'MASTER', 'MSDB', 'TEMPDB', 'SELECT', 'INSERT', 'UPDATE', 'DELETE']:
+                        if schema_part:
+                            tables.add(f"{schema_part}.{table_part}")
+                        else:
+                            tables.add(table_part)
+            
+            # Pattern 2: INSERT INTO table_name, UPDATE table_name
+            insert_update_pattern = r'\b(?:INSERT\s+INTO|UPDATE)\s+(?:\[?([a-zA-Z_][a-zA-Z0-9_]*)\]?\.)?(?:\[?([a-zA-Z_][a-zA-Z0-9_]*)\]?)'
+            matches = re.findall(insert_update_pattern, definition, re.IGNORECASE)
+            
+            for match in matches:
+                schema_part, table_part = match
+                if table_part and table_part.upper() not in ['VALUES', 'SET']:
+                    if schema_part:
+                        tables.add(f"{schema_part}.{table_part}")
+                    else:
+                        tables.add(table_part)
+            
+            # Pattern 3: DELETE FROM table_name
+            delete_pattern = r'\bDELETE\s+FROM\s+(?:\[?([a-zA-Z_][a-zA-Z0-9_]*)\]?\.)?(?:\[?([a-zA-Z_][a-zA-Z0-9_]*)\]?)'
+            matches = re.findall(delete_pattern, definition, re.IGNORECASE)
+            
+            for match in matches:
+                schema_part, table_part = match
+                if table_part:
+                    if schema_part:
+                        tables.add(f"{schema_part}.{table_part}")
+                    else:
+                        tables.add(table_part)
+            
+            # Verify tables exist in database to filter out false positives
+            verified_tables = []
+            for table in tables:
+                if '.' in table:
+                    table_schema, table_name = table.split('.', 1)
+                else:
+                    table_schema, table_name = schema, table
+                
+                # Check if table exists
+                try:
+                    check_query = """
+                    SELECT COUNT(*) as count_result
+                    FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+                    """
+                    check_result = await self.execute_query(check_query, [table_schema, table_name])
+                    exists = check_result and len(check_result) > 0 and check_result[0].get('count_result', 0) > 0
+                    
+                    if exists:
+                        verified_tables.append(f"{table_schema}.{table_name}")
+                except Exception:
+                    # If verification fails, include the table anyway
+                    verified_tables.append(table)
+            
+            return sorted(list(set(verified_tables)))
+            
+        except Exception as e:
+            self.logger.warning(f"Error parsing table dependencies for {schema}.{sp_name}: {e}")
+            return []
