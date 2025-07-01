@@ -139,7 +139,7 @@ class SQLServerConnector(BaseDatabaseConnector):
                 table_info = {
                     'schema': row['schema_name'],
                     'name': row['name'],
-                    'type': DatabaseObjectType.TABLE if row['object_type'] == 'table' else DatabaseObjectType.VIEW,
+                    'type': DatabaseObjectType.TABLE.value if row['object_type'] == 'table' else DatabaseObjectType.VIEW.value,
                     'full_name': f"{row['schema_name']}.{row['name']}"
                 }
                 
@@ -212,7 +212,7 @@ class SQLServerConnector(BaseDatabaseConnector):
                 proc_info = {
                     'schema': row['schema_name'],
                     'name': row['name'],
-                    'type': DatabaseObjectType.STORED_PROCEDURE,
+                    'type': DatabaseObjectType.STORED_PROCEDURE.value,
                     'created_date': str(row['create_date']) if row['create_date'] else None,
                     'modified_date': str(row['modify_date']) if row['modify_date'] else None,
                     'full_name': f"{row['schema_name']}.{row['name']}"
@@ -287,7 +287,7 @@ class SQLServerConnector(BaseDatabaseConnector):
                 func_info = {
                     'schema': row['schema_name'],
                     'name': row['name'],
-                    'type': DatabaseObjectType.FUNCTION,
+                    'type': DatabaseObjectType.FUNCTION.value,
                     'function_type': row['type_desc'],
                     'created_date': str(row['create_date']) if row['create_date'] else None,
                     'modified_date': str(row['modify_date']) if row['modify_date'] else None,

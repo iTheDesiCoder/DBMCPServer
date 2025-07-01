@@ -258,16 +258,16 @@ class DatabaseMetadataService:
                                 if (search_term.lower() in table["name"].lower() and 
                                     not connector.should_exclude_object(table["name"])):
                                     
-                                    table_type = table.get("type", "TABLE")
-                                    if ((table_type == "TABLE" and DatabaseObjectType.TABLE in object_types) or
-                                        (table_type == "VIEW" and DatabaseObjectType.VIEW in object_types)):
+                                    table_type = table.get("type", "table")
+                                    if ((table_type == "table" and DatabaseObjectType.TABLE in object_types) or
+                                        (table_type == "view" and DatabaseObjectType.VIEW in object_types)):
                                         
                                         results.append({
                                             "name": table["name"],
                                             "schema": schema_name,
-                                            "type": table_type,
+                                            "type": table_type.upper(),  # Return uppercase for consistency
                                             "description": table.get("description", ""),
-                                            "object_category": "table" if table_type == "TABLE" else "view"
+                                            "object_category": "table" if table_type == "table" else "view"
                                         })
                                         
                                         if len(results) >= limit:
@@ -302,7 +302,7 @@ class DatabaseMetadataService:
                                     results.append({
                                         "name": procedure["name"],
                                         "schema": schema_name,
-                                        "type": "PROCEDURE",
+                                        "type": "STORED_PROCEDURE",  # Use consistent enum value
                                         "description": procedure.get("description", ""),
                                         "object_category": "stored_procedure"
                                     })

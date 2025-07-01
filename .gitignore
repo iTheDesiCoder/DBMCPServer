@@ -32,6 +32,13 @@ config.yaml
 .env
 *.log
 
+# Test and Debug Files
+debug_*.py
+test_*.py
+*_test.py
+simple_test.py
+restart_and_test.py
+
 # IDE
 .vscode/
 .idea/

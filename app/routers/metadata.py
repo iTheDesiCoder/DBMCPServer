@@ -83,7 +83,8 @@ async def get_stored_procedure_metadata(
 
 @router.get("/search")
 async def search_database_objects(
-    q: str = Query(..., description="Search term", min_length=1),
+    query: Optional[str] = Query(None, description="Search term"),
+    q: Optional[str] = Query(None, description="Search term (backward compatibility)"),
     types: Optional[List[str]] = Query(None, description="Object types to search (table, view, stored_procedure, function)"),
     schema: Optional[str] = Query(None, description="Schema to search within"),
     database: Optional[str] = Query(None, description="Database name to query"),
@@ -137,14 +138,15 @@ async def search_database_objects(
                     }
                 )
         
-        # Validate search term
-        if not q or not q.strip():
+        # Handle both 'query' and 'q' parameters for backward compatibility
+        search_query = query or q
+        if not search_query or not search_query.strip():
             raise HTTPException(
                 status_code=422,
-                detail="Search term cannot be empty"
+                detail="Search term cannot be empty. Use 'query' or 'q' parameter."
             )
         
-        search_term = q.strip()
+        search_term = search_query.strip()
         
         logger.info(f"Searching for '{search_term}' with types: {[t.value for t in object_types] if object_types else 'all'}")
         
@@ -155,6 +157,8 @@ async def search_database_objects(
             database_name=database,
             limit=limit
         )
+        
+        logger.info(f"Search completed: found {len(results)} results")
         
         # Categorize results for better response
         categorized_results = {
@@ -202,7 +206,7 @@ async def search_database_objects(
             detail={
                 "error": "Search failed",
                 "message": str(e),
-                "search_term": q if 'q' in locals() else None
+                "search_term": search_query if 'search_query' in locals() else None
             }
         )
 
